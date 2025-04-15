@@ -11,7 +11,6 @@
  * Learn more at https://developers.cloudflare.com/workers/
  */
 import OpenAI from "openai";
-import * as cheerio from "cheerio";
 import fetch from 'node-fetch';
 
 const schema = {
@@ -55,70 +54,74 @@ const schema = {
 				}
 			},
 			"instructions": {
-				"type": "string",
-				"description": "The instructions for preparing the recipe."
+				"type": "array",
+				"description": "Step-by-step instructions to prepare the recipe.",
+				"items": {
+					"type": "string",
+					"description": "A single step in the recipe's preparation."
+				}
 			}
 		},
-		"required": [
-			"name",
-			"description",
-			"ingredients",
-			"instructions"
-		],
-		"additionalProperties": false
-	},
-	"strict": true
-};
+			"required": [
+				"name",
+				"description",
+				"ingredients",
+				"instructions"
+			],
+			"additionalProperties": false
+		},
+		"strict": true
+	};
 
-async function getRecipeFromAI(openai: OpenAI, foodName: string | null) {
-	if (!foodName) {
-		return new Response(JSON.stringify({ error: "foodName parameter is required" }), {
-			status: 400,
-			headers: { 'Content-Type': 'application/json' },
-		});
+	async function getRecipeFromAI(openai: OpenAI, foodName: string | null) {
+		if (!foodName) {
+	return new Response(JSON.stringify({ error: "foodName parameter is required" }), {
+		status: 400,
+		headers: { 'Content-Type': 'application/json' },
+	});
+}
+
+try {
+	const chatCompletion = await openai.chat.completions.create({
+		response_format: { "type": "json_schema", "json_schema": schema },
+		store: true,
+		messages: [
+			{ role: "system", content: "please give me a promising recipe, it can be from famous chefs. it should be detailed with all tips and tricks." },
+			{ role: "user", content: `recipe of ${foodName}` }
+		],
+		model: "gpt-4o",
+		temperature: 1,
+		max_tokens: 4096,
+		top_p: 1
+	});
+
+	if (chatCompletion.choices[0].finish_reason === "length") {
+		// Handle the case where the model did not return a complete response
+		throw new Error("Incomplete response");
 	}
 
-	try {
-		const chatCompletion = await openai.chat.completions.create({
-			response_format: { "type": "json_schema", "json_schema": schema },
-			store: true,
-			messages: [
-				{ role: "system", content: "please give me a promising recipe, it can be from famous chefs. it should be detailed with all tips and tricks." },
-				{ role: "user", content: `recipe of ${foodName}` }
-			],
-			model: "gpt-4o",
-			temperature: 1,
-			max_tokens: 4096,
-			top_p: 1
-		});
+	const recipeResponse = chatCompletion.choices[0].message;
 
-		if (chatCompletion.choices[0].finish_reason === "length") {
-			// Handle the case where the model did not return a complete response
-			throw new Error("Incomplete response");
-		}
+	if (recipeResponse.refusal) {
+		throw new Error("Model refused to provide a recipe");
 
-		const recipeResponse = chatCompletion.choices[0].message;
-
-		if (recipeResponse.refusal) {
-			throw new Error("Model refused to provide a recipe");
-
-		} else if (recipeResponse.content) {
-			return new Response(JSON.stringify(JSON.parse(recipeResponse.content), null, 2), {
-				headers: {
-					'Content-Type': 'application/json',
-				},
-			});
-		} else {
-			throw new Error("No response content");
-		}
-
-	} catch (e: unknown) {
-		return new Response(JSON.stringify({ error: e instanceof Error ? e.message : 'An unknown error occurred' }, null, 2), {
+	} else if (recipeResponse.content) {
+		return new Response(JSON.stringify(JSON.parse(recipeResponse.content), null, 2), {
 			headers: {
 				'Content-Type': 'application/json',
 			},
 		});
+	} else {
+		throw new Error("No response content");
 	}
+
+} catch (e: unknown) {
+	return new Response(JSON.stringify({ error: e instanceof Error ? e.message : 'An unknown error occurred' }, null, 2), {
+		headers: {
+			'Content-Type': 'application/json',
+		},
+	});
+}
 
 }
 
